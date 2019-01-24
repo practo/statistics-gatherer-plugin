@@ -1,7 +1,7 @@
 package org.jenkins.plugins.statistics.gatherer.listeners;
 
 import hudson.Extension;
-import hudson.model.AbstractProject;
+import hudson.model.AbstractItem;
 import hudson.model.Item;
 import hudson.model.User;
 import hudson.model.listeners.ItemListener;
@@ -11,9 +11,12 @@ import org.jenkins.plugins.statistics.gatherer.model.job.JobStats;
 import org.jenkins.plugins.statistics.gatherer.util.*;
 
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.Date;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.json.JSONObject;
+import org.json.XML;
 
 /**
  * Created by hthakkallapally on 3/12/2015.
@@ -30,7 +33,7 @@ public class ItemStatsListener extends ItemListener {
     public void onCreated(Item item) {
         if (PropertyLoader.getProjectInfo() && canHandle(item)) {
             try {
-                AbstractProject<?, ?> project = asProject(item);
+                AbstractItem project = asProject(item);
                 JobStats ciJob = addCIJobData(project);
                 ciJob.setCreatedDate(new Date());
                 ciJob.setStatus(Constants.ACTIVE);
@@ -44,16 +47,16 @@ public class ItemStatsListener extends ItemListener {
         }
     }
 
-    private AbstractProject<?, ?> asProject(Item item) {
+    private AbstractItem asProject(Item item) {
         if(canHandle(item)) {
-            return (AbstractProject<?, ?>) item;
+            return (AbstractItem) item;
         } else {
-            throw new IllegalArgumentException("Discarding item " + item.getDisplayName() + "/" + item.getClass() + " because it is not an AbstractProject");
+            throw new IllegalArgumentException("Discarding item " + item.getDisplayName() + "/" + item.getClass() + " because it is not an AbstractItem");
         }
     }
 
     private boolean canHandle(Item item) {
-        return item instanceof AbstractProject<?, ?>;
+        return item instanceof AbstractItem;
     }
 
     private void logException(Item item, Exception e) {
@@ -76,7 +79,7 @@ public class ItemStatsListener extends ItemListener {
      * @param project
      * @return
      */
-    private JobStats addCIJobData(AbstractProject<?, ?> project) {
+    private JobStats addCIJobData(AbstractItem project) {
         JobStats ciJob = new JobStats();
         ciJob.setCiUrl(Jenkins.getInstance().getRootUrl());
         ciJob.setName(project.getName());
@@ -97,7 +100,7 @@ public class ItemStatsListener extends ItemListener {
      * @param project
      * @param ciJob
      */
-    private void setConfig(AbstractProject<?, ?> project, JobStats ciJob) {
+    private void setConfig(AbstractItem project, JobStats ciJob) {
         try {
             ciJob.setConfigFile(project.getConfigFile().asString());
         } catch (IOException e) {
@@ -106,14 +109,43 @@ public class ItemStatsListener extends ItemListener {
         }
     }
 
+    /**
+     * check if project disabled
+     *
+     * @param project
+     * @return
+     */
+
+    private boolean isDisabled(AbstractItem project) {
+       boolean is_disabled = false;
+       try {
+            JSONObject xmlJSONObj = XML.toJSONObject(project.getConfigFile().asString());
+            Iterator<String> keys = xmlJSONObj.keys();
+            while(keys.hasNext()) {
+                String key = keys.next();
+                if (xmlJSONObj.get(key) instanceof JSONObject) {
+                    JSONObject data = (JSONObject) xmlJSONObj.get(key);
+                    if (data.has("disabled")) {
+                        is_disabled = (boolean) data.get("disabled");
+                        return is_disabled;
+                    }
+                }
+            }
+       }
+       catch (Exception e) {
+           logException(project, e);
+       }
+       return is_disabled;
+    }
+
     @Override
     public void onUpdated(Item item) {
         if (PropertyLoader.getProjectInfo() && canHandle(item)) {
-            AbstractProject<?, ?> project = asProject(item);
+            AbstractItem project = asProject(item);
             try {
                 JobStats ciJob = addCIJobData(project);
                 ciJob.setUpdatedDate(new Date());
-                ciJob.setStatus(project.isDisabled() ? Constants.DISABLED : Constants.ACTIVE);
+                ciJob.setStatus(isDisabled(project) ? Constants.DISABLED : Constants.ACTIVE);
                 setConfig(project, ciJob);
                 RestClientUtil.postToService(getRestUrl(), ciJob);
                 SnsClientUtil.publishToSns(ciJob);
@@ -127,7 +159,7 @@ public class ItemStatsListener extends ItemListener {
     @Override
     public void onDeleted(Item item) {
         if (PropertyLoader.getProjectInfo() && canHandle(item)) {
-            AbstractProject<?, ?> project = asProject(item);
+            AbstractItem project = asProject(item);
             try {
                 JobStats ciJob = addCIJobData(project);
                 ciJob.setUpdatedDate(new Date());
